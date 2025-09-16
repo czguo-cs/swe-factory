@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import shutil
 import subprocess
@@ -7,7 +8,7 @@ import argparse
 from contextlib import contextmanager
 from typing import List, Dict
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
+import glob
 @contextmanager
 def cd(newdir):
     prevdir = os.getcwd()
@@ -17,12 +18,14 @@ def cd(newdir):
     finally:
         os.chdir(prevdir)
 
-def run_command(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+
+def run_command(cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(cmd, check=True, **kwargs)
     except subprocess.CalledProcessError as e:
         print(f"Error running command: {cmd}, {e}")
         raise
+
 
 def get_version_by_git(cloned_dir: str) -> str:
     if not os.path.isdir(cloned_dir):
@@ -36,12 +39,14 @@ def get_version_by_git(cloned_dir: str) -> str:
             return match.group(1)
         raise RuntimeError(f"Unrecognized version: {version}")
 
+
 def get_instances(instance_path: str) -> List[Dict]:
     if instance_path.endswith((".jsonl", ".jsonl.all")):
         with open(instance_path, encoding="utf-8") as f:
             return [json.loads(line) for line in f]
     with open(instance_path, encoding="utf-8") as f:
         return json.load(f)
+
 
 def prepare_repo_cache(tasks: List[Dict], cache_dir: str) -> Dict[str, str]:
     os.makedirs(cache_dir, exist_ok=True)
@@ -60,13 +65,13 @@ def prepare_repo_cache(tasks: List[Dict], cache_dir: str) -> Dict[str, str]:
             print(f"❌ Failed to clone {repo}: {e}")
     return repo_cache
 
+
 def process_repo_task(task: Dict, testbed: str, repo_cache: Dict[str, str]) -> Dict | None:
     instance_id = task["instance_id"]
     repo = task["repo"]
     base_commit = task["base_commit"]
     repo_dir = os.path.join(testbed, instance_id)
     os.makedirs(repo_dir, exist_ok=True)
-
     try:
         cached_repo = repo_cache.get(repo)
         if not cached_repo or not os.path.exists(cached_repo):
@@ -84,46 +89,62 @@ def process_repo_task(task: Dict, testbed: str, repo_cache: Dict[str, str]) -> D
     finally:
         shutil.rmtree(repo_dir, ignore_errors=True)
 
-def process_repos(tasks: List[Dict], testbed: str, repo_cache: Dict[str, str], max_workers: int = 4) -> tuple[List[Dict], List[Dict]]:
+
+def process_repos(tasks: List[Dict], testbed: str, repo_cache: Dict[str, str], max_workers: int = 4) -> List[Dict]:
     os.makedirs(testbed, exist_ok=True)
-    results, failures = [], []
+    results = []
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        future_to_task = {
-            executor.submit(process_repo_task, t, testbed, repo_cache): t for t in tasks
-        }
-        for future in as_completed(future_to_task):
-            task = future_to_task[future]
-            try:
-                result = future.result()
-                if result:
-                    results.append(result)
-                else:
-                    failures.append(task)
-            except Exception as e:
-                print(f"Unexpected error in {task['instance_id']}: {e}")
-                failures.append(task)
-    return results, failures
+        futures = [executor.submit(process_repo_task, t, testbed, repo_cache) for t in tasks]
+        for future in as_completed(futures):
+            res = future.result()
+            if res:
+                results.append(res)
+    return results
+
 
 def save_results(results: List[Dict], output_path: str):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     if output_path.endswith((".jsonl", ".jsonl.all")):
         with open(output_path, "w", encoding="utf-8") as f:
             for r in results:
-                f.write(json.dumps(r) + "\n")
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
     else:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
 
-def generate_output_path(instance_path: str, suffix="_versions") -> str:
+
+def generate_output_path(instance_path: str, suffix: str) -> str:
     base, ext = os.path.splitext(instance_path)
+    ext='.json'
     return f"{base}{suffix}{ext}"
+
+def find_github_file(output_dir: str) -> str | None:
+    """
+    search file
+    """
+    # 通配所有 _versions_by_github.json 或 jsonl
+    for ext in ('json', 'jsonl'):
+        pattern = os.path.join(output_dir, f"*_versions_by_github.{ext}")
+        matches = glob.glob(pattern)
+        if matches:
+            return matches[0]
+    return None
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--instance_path", type=str, required=True, help="Path to input task file (.json or .jsonl)")
-    parser.add_argument("--testbed", type=str, required=True, help="Temp working directory for cloning repos")
-    parser.add_argument("--max-workers", type=int, default=10, help="Number of processes (default: 4)")
+    parser.add_argument("--instance_path", "-i", type=str, required=True,
+                        help="Path to input task file (.json or .jsonl)")
+    parser.add_argument("--testbed", "-t", type=str, default="testbed",
+                        help="Temp working directory for cloning repos")
+    parser.add_argument("--max_workers", "-w", type=int, default=10,
+                        help="Number of parallel workers")
+    parser.add_argument("--output_dir", "-d", type=str, default=None,
+                        help="Directory to save output (keeps original filename + suffix)")
+    parser.add_argument("--last_stage_output_dir", "-l", type=str, default=None,
+                        help="Directory to save output (keeps original filename + suffix)")
     args = parser.parse_args()
+
 
     try:
         tasks = get_instances(args.instance_path)
@@ -131,28 +152,37 @@ def main():
         print(f"❌ Error reading instance file: {e}")
         return
 
-    required_keys = {"repo", "base_commit", "instance_id"}
+   
+    github_file = find_github_file(args.last_stage_output_dir)
+    
+    if github_file:
+        try:
+            processed = get_instances(github_file)
+            seen = {item.get('instance_id') for item in processed if 'instance_id' in item}
+            before = len(tasks)
+            tasks = [t for t in tasks if t.get('instance_id') not in seen]
+            print(f"ℹ️ Skipped {before - len(tasks)} tasks already in {os.path.basename(github_file)}")
+        except Exception as e:
+            print(f"⚠️ Failed to read GitHub versions file: {e}")
+
     for t in tasks:
-        if not required_keys.issubset(t):
+        if not {"repo", "base_commit", "instance_id"}.issubset(t):
             print(f"Invalid task format: {t}")
             return
 
-    repo_cache_dir = os.path.join(args.testbed, "_cache")
-    repo_cache = prepare_repo_cache(tasks, repo_cache_dir)
 
-    results, failures = process_repos(tasks, args.testbed, repo_cache, args.max_workers)
+    cache_dir = os.path.join(args.testbed, "_cache")
+    repo_cache = prepare_repo_cache(tasks, cache_dir)
+    results = process_repos(tasks, args.testbed, repo_cache, args.max_workers)
 
-    output_path = generate_output_path(args.instance_path, "_versions")
+    tmp = generate_output_path(args.instance_path, "_versions_by_git")
+    if args.output_dir:
+        output_path = os.path.join(args.output_dir, os.path.basename(tmp))
+    else:
+        output_path = tmp
+
     save_results(results, output_path)
     print(f"\n✅ {len(results)} results saved to {output_path}")
-
-    if failures:
-        fail_path = generate_output_path(args.instance_path, "_failures")
-        save_results(failures, fail_path)
-        print(f"⚠️  {len(failures)} failures saved to {fail_path}")
-
-    for r in results:
-        print(json.dumps(r, indent=2, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()

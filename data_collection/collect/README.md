@@ -53,7 +53,10 @@ This directory provides code to collect raw issue data using GitHub APIs and pre
 4. **Versioning**
    - Use the `get_version.py` script to assign version numbers to the raw instances.
    
-   - **Note on Strategy**: The script employs an automated strategy to avoid manual work. It checks out the `base_commit` for each instance, gets a version string via the `git describe --tags` command, and then parses the version number from that output. This is effective for most repositories.
+   - **Note on Strategy**: The script works by checking out an instance's `base_commit` and parsing the output of the `git describe   --tags` command.
+
+    This method's success **depends entirely on a repository's tagging practices**. It may fail or produce inaccurate versions if release tags are inconsistent or not used. For more reliable results, please follow the complete [versioning documentation](../versioning).
+
     
     Example:
      ```bash

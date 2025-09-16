@@ -40,6 +40,13 @@ def _find_version_in_text(text: str, instance: dict) -> str:
         matches = re.search(pattern, text)
         if matches is not None:
             print(instance['repo'])
+            if "_version_major" in pattern:
+                return ".".join(matches.groups()) if matches else None
+            if "MAJOR" in pattern:
+                maj = matches.group(1)
+                mino = matches.group(2)
+                mic = matches.group(3)
+                return f"{maj}.{mino}.{mic}"
             if instance['repo'] == 'pyvista/pyvista':
                 text = matches.group(0)
                 text = text.split('=')[-1].strip() if '=' in text else text.strip()
@@ -111,6 +118,9 @@ def get_version(instance, is_build=False, path_repo=None):
             return version
         if version == None and instance['repo']=='tqdm/tqdm':
             return 'get_version'
+    if version is None:
+        logger.info(f"Version not found for {instance['instance_id']} ({instance['repo']} @ {instance['base_commit']})")
+
     return version
 
 
@@ -230,7 +240,7 @@ def get_versions_from_web(data: dict):
 
 def merge_results(instances_path: str, repo_prefix: str, output_dir: str = None) -> int:
     """
-    Helper function for merging JSON result files generated from multiple threads.
+    Helper function for merging JSON/JSONL result files generated from multiple threads.
 
     Args:
         instances_path (str): Path to original task instances without versions
@@ -239,24 +249,44 @@ def merge_results(instances_path: str, repo_prefix: str, output_dir: str = None)
     Returns:
         int: Number of instances in merged results
     """
-    # Merge values from result JSON files into a single list
-    merged = []
-    for task_with_version_path in glob.glob(f"{repo_prefix}_versions_*.json"):
-        with open(task_with_version_path) as f:
-            task_with_version = json.load(f)
-            merged.extend(task_with_version)
-        os.remove(task_with_version_path)
+    # 1. output format
+    ext = os.path.splitext(instances_path)[1].lower()  # '.json' 或 '.jsonl'
+    if ext not in (".json", ".jsonl"):
+        ext = ".json"  # 默认
 
-    # Save merged results to original task instances file's path with `_versions` suffix
-    old_path_file = instances_path.split("/")[-1]
-    instances_path_new = f"{old_path_file.split('.')[0]}_versions.json"
-    if output_dir is not None:
-        os.makedirs(output_dir,exist_ok=True)
-        instances_path_new = os.path.join(output_dir, instances_path_new)
-    with open(f"{instances_path_new}", "w") as f:
-        json.dump(merged, fp=f)
-    logger.info(f"Saved merged results to {instances_path_new} ({len(merged)} instances)")
+    # 2. merge
+    merged = []
+    dropped = 0
+    for path in glob.glob(f"{repo_prefix}_versions_*.json"):
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        for inst in data:
+            if inst.get("version"):
+                merged.append(inst)
+            else:
+                dropped += 1
+        os.remove(path)
+
+    # 3. construct output path
+    base = os.path.splitext(os.path.basename(instances_path))[0]
+    out_name = f"{base}_versions_by_github{ext}"
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        out_name = os.path.join(output_dir, out_name)
+
+    # 4. write file
+    if ext == ".jsonl":
+        with open(out_name, "w", encoding="utf-8") as f:
+            for inst in merged:
+                f.write(json.dumps(inst, ensure_ascii=False) + "\n")
+    else:
+        # .json
+        with open(out_name, "w", encoding="utf-8") as f:
+            json.dump(merged, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"Saved merged results to {out_name} ({len(merged)} instances, dropped {dropped} without version)")
     return len(merged)
+
 
 
 def main(args):
@@ -274,6 +304,9 @@ def main(args):
     logger.info(
         f"Split instances into {len(data_task_lists)} groups with lengths {[len(x) for x in data_task_lists]}"
     )
+    if data_tasks[0]['repo'] not in MAP_REPO_TO_VERSION_PATHS:
+        logger.info("No patterns defined to extract version")
+        return
 
     # If retrieval method includes GitHub, then search GitHub for versions via parallel call
     if any([x == args.retrieval_method for x in ["github", "mix"]]):
@@ -300,7 +333,7 @@ def main(args):
 
         if args.retrieval_method == "github":
             # If retrieval method is just GitHub, then merge results and return
-            assert len(data_tasks) == merge_results(
+            merge_results(
                 args.instances_path, repo_prefix, args.output_dir
             )
             return
