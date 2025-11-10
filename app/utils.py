@@ -92,6 +92,7 @@ def clone_repo(clone_link: str, cloned_dir: str):
     dest_dir = os.path.dirname(cloned_dir)  # 获取目录路径
     cloned_name = os.path.basename(cloned_dir)
     clone_cmd = ["git", "clone", clone_link, cloned_name]
+    print(f"开始克隆：{clone_cmd}")
     create_dir_if_not_exists(dest_dir)
     with cd(dest_dir):
         run_command(clone_cmd)
@@ -104,23 +105,32 @@ def clone_repo_and_checkout(
     # dest_dir: str, cloned_name: str
 ):
     """
-    Clone a repo to dest_dir, and checkout to commit `commit_hash`.
+    Clone a repo to cloned_dir, and checkout to commit `commit_hash` (with full cleanup).
 
     Returns:
         - path to the newly cloned directory.
     """
-    # cloned_dir = 
+    # 克隆远程仓库或复制本地目录
     if clone_link.endswith('.git'):
+        # 处理远程仓库克隆
+        if os.path.exists(cloned_dir):
+            shutil.rmtree(cloned_dir)  # 若目录已存在，先删除
         clone_repo(clone_link, cloned_dir)
     else:
+        # 处理本地目录复制
         if os.path.isdir(cloned_dir):
             shutil.rmtree(cloned_dir)
         shutil.copytree(clone_link, cloned_dir)
+        print("本地目录复制完成")
+
+    # 若指定了commit_hash，执行重置+清理+checkout（包含子模块处理）
     if commit_hash != "":
-        checkout_cmd = ["git", "checkout", commit_hash]
-        with cd(cloned_dir):
-            run_command(checkout_cmd)
-    # return cloned_dir
+        with cd(cloned_dir):  # 进入克隆后的目录
+            print(f"开始重置仓库到 commit: {commit_hash}")
+            repo_reset_and_clean_checkout(commit_hash)  # 调用完整清理函数
+            print(f"仓库已重置并切换到 commit: {commit_hash}")
+
+        # return cloned_dir
 
 def get_version_by_git(cloned_dir:str)-> str:
     command = ["git"," describe","--tags"]

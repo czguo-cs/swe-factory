@@ -15,6 +15,7 @@ def register_all_models() -> None:
     """
     Register all models. This is called in main.
     """
+    common.register_model(gpt.Kimi_k2_instruct())
     common.register_model(gpt.Gpt4o_20241120())
     common.register_model(gpt.Gpt4o_20240806())
     common.register_model(gpt.Gpt4o_20240513())

@@ -313,7 +313,13 @@ class Gpt4o_20241120(OpenaiModel):
             "gpt-4o-2024-11-20", 16384, 0.0000025, 0.000010, parallel_tool_call=True
         )
         self.note = "Multimodal model. Up to Apr 2023."
-
+        
+class Kimi_k2_instruct(OpenaiModel):
+    def __init__(self):
+        super().__init__(
+            "kimi-k2-instruct", 131072, 0.0000006, 0.0000025, parallel_tool_call=True
+        )
+        self.note = "Multimodal model. Up to Apr 2023."
 
 class Gpt4o_20240513(OpenaiModel):
     def __init__(self):

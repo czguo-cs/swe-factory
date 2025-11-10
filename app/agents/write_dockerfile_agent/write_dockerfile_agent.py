@@ -118,12 +118,56 @@ class WriteDockerfileAgent(Agent):
 
     def get_latest_dockerfile(self) -> str:
         """
-        Read and return contents of the latest generated Dockerfile.
+        Read and return contents of the latest generated Dockerfile,
+        并将构建时所需的代理环境变量紧跟在 FROM 语句之后插入。
         """
         path = os.path.join(self.get_latest_write_dockerfile_output_dir(), 'Dockerfile')
+        
+        # 代理环境变量块（使用 ENV 确保在构建和运行时都生效）
+        env_vars_block = f"""
+
+# Set Proxy Environment Variables
+ENV https_proxy="http://iJbVyX:mJ8eR9tU6%5Bs@10.251.112.51:8799"
+ENV http_proxy="http://iJbVyX:mJ8eR9tU6%5Bs@10.251.112.51:8799"
+ENV no_proxy="localhost,127.0.0.1,::1,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,*.lan,.baidu.com,.baidu-int.com,baidu.com,baidu-int.com"
+ENV NO_PROXY="$no_proxy"
+
+"""
+        
         try:
             with open(path, 'r') as f:
-                return f.read()
+                original_content = f.read()
+                lines = original_content.splitlines()
+                
+                # 找到 FROM 语句的索引
+                from_index = -1
+                
+                # 使用正则表达式来健壮地匹配 FROM 指令，忽略前面的空白或注释
+                from_pattern = re.compile(r'^\s*FROM\s', re.IGNORECASE)
+                
+                for i, line in enumerate(lines):
+                    # 检查是否匹配 FROM 指令
+                    if from_pattern.match(line):
+                        from_index = i
+                        break
+
+                if from_index != -1:
+                    # 1. 找到 FROM 语句所在的行。
+                    # 2. 插入到 FROM 语句之后。
+                    
+                    # 插入环境变量块。我们将整个多行字符串作为一个元素插入到列表中。
+                    lines.insert(from_index + 1, env_vars_block)
+                    
+                    # 3. 重建 Dockerfile 内容
+                    # 使用 '\n' 重新连接行，Python 的 join 会正确处理插入的包含换行符的 env_vars_block
+                    return '\n'.join(lines)
+                else:
+                    # 理论上 Dockerfile 必须有 FROM。如果找不到，记录警告并追加（可能导致构建失败）
+                    logger.warning("FROM statement not found in Dockerfile. Appending proxy ENV to the end.")
+                    return original_content + env_vars_block
+                
         except Exception as e:
             logger.error(f"Failed to read latest Dockerfile at {path}: {e}")
             return ""
+
+    
